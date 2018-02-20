@@ -8,6 +8,6 @@ readme = "README.md"
 license = "GPL-3.0"
 
 [dependencies]
-ssb-common = { git = "https://github.com/AljoschaMeyer/ssb-common-rs" }
+ssb-common = "0.1.0"
 regex = "0.2.6"
 lazy_static = "1.0.0"
