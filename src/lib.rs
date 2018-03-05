@@ -10,6 +10,10 @@ extern crate ssb_common;
 extern crate regex;
 #[macro_use]
 extern crate lazy_static;
+extern crate serde;
+extern crate serde_json;
+#[macro_use]
+extern crate serde_derive;
 
 use std::path::{PathBuf, Path};
 use std::io::{self, Read, Write};
@@ -19,8 +23,11 @@ use std::fmt::{self, Display, Formatter};
 use std::convert::From;
 
 use ssb_common::directory::ssb_directory;
-use ssb_common::keys::{PublicKey, SecretKey, PublicKeyEncBuf, SecretKeyEncBuf, gen_keypair};
+use ssb_common::keys::{PublicKey, SecretKey, gen_keypair};
 use regex::{Regex, RegexBuilder};
+use serde::de::Error as DeError;
+use serde_json::{from_str, to_string_pretty};
+use serde_json::error::Error as JsonError;
 
 /// The name of the ssb keyfile.
 pub const KEYFILE_NAME: &'static str = "secret";
@@ -36,39 +43,49 @@ pub fn keyfile_path() -> Option<PathBuf> {
                         })
 }
 
-fn base64_strings_from_secret_file(secret: &str) -> Option<(&str, &str)> {
-    lazy_static! {
-        static ref RE: Regex = RegexBuilder::new(".*?\\{.*?\"public\"\\s*:\\s*\"(.*?)\"\\s*,\\s*\"private\"\\s*:\\s*\"(.*?)\".*\\}").dot_matches_new_line(true).build().unwrap();
-    }
+#[derive(Deserialize)]
+struct KeyfileContent {
+    public: PublicKey,
+    private: SecretKey,
+}
 
-    match RE.captures(secret) {
-        None => None,
-        Some(caps) => {
-            match caps.get(1) {
-                None => None,
-                Some(pk_enc) => {
-                    match caps.get(2) {
-                        None => None,
-                        Some(sk_enc) => Some((pk_enc.as_str(), sk_enc.as_str())),
-                    }
-                }
-            }
+#[derive(Serialize)]
+struct KeyfileContentBorrow<'a> {
+    curve: String,
+    public: &'a PublicKey,
+    private: &'a SecretKey,
+    id: String, // TODO change this once links are implemented in ssb-common
+}
+
+impl<'a> KeyfileContentBorrow<'a> {
+    fn new(pk: &'a PublicKey, sk: &'a SecretKey) -> KeyfileContentBorrow<'a> {
+        KeyfileContentBorrow {
+            curve: if pk.is_ed25519() {
+                "ed25519".to_string()
+            } else {
+                unimplemented!()
+            },
+            public: pk,
+            private: sk,
+            id: "TODO".to_string(), // TODO change this once links are implemented in ssb-common
         }
     }
 }
 
 /// Parse the public and secret key from the content of a key file as a string.
-pub fn keys_from_str(secret: &str) -> Result<(PublicKey, SecretKey), DecodingError> {
-    match base64_strings_from_secret_file(secret) {
-        None => Err(DecodingError::MalformedFile),
-        Some((pk_enc, sk_enc)) => {
-            match pk_enc.parse::<PublicKey>() {
-                Err(_) => Err(DecodingError::InvalidKeyEncoding),
-                Ok(pk) => {
-                    match sk_enc.parse::<SecretKey>() {
-                        Err(_) => Err(DecodingError::InvalidKeyEncoding),
-                        Ok(sk) => Ok((pk, sk)),
-                    }
+pub fn keys_from_str(secret: &str) -> Result<(PublicKey, SecretKey), JsonError> {
+    lazy_static! {
+        static ref RE: Regex = RegexBuilder::new(r"^(?:\s*#.*?\n)*(.*?)(?:\s*#.*\n?)$").dot_matches_new_line(true).build().unwrap();
+    }
+
+    match RE.captures(secret) {
+        None => Err(JsonError::custom("keyfile did not contain a json object")),
+        Some(caps) => {
+            match caps.get(1) {
+                None => Err(JsonError::custom("keyfile did not contain a json object")),
+                Some(json) => {
+                    let content = from_str::<KeyfileContent>(json.as_str());
+                    content.map(|data| (data.public, data.private))
                 }
             }
         }
@@ -100,29 +117,11 @@ pub fn load_keys() -> Result<(PublicKey, SecretKey), KeyfileError> {
 
 /// Create a string containing the content of a new secret file for the given keys.
 pub fn new_keyfile_string(pk: &PublicKey, sk: &SecretKey) -> String {
-    let mut msg = String::with_capacity(727);
-
-    let pk_enc = PublicKeyEncBuf::new(pk);
-    let sk_enc = SecretKeyEncBuf::new(sk);
+    let mut msg = String::with_capacity(705);
 
     msg.push_str(PRE_COMMENT);
-    msg.push_str("{
-  \"curve\": \"ed25519\",
-  \"public\": \"");
-    msg.push_str(pk_enc.as_ref());
-    msg.push_str("\",
-  \"private\": \"");
-    msg.push_str(sk_enc.as_ref());
-    msg.push_str("\",
-  \"id\": \"");
-    msg.push_str("@");
-    msg.push_str(&pk_enc.as_ref());
-    msg.push_str("\"
-}
-
-");
+    msg.push_str(&to_string_pretty(&KeyfileContentBorrow::new(pk, sk)).unwrap());
     msg.push_str(POST_COMMENT);
-    msg.push_str(&pk_enc.as_ref());
 
     msg
 }
@@ -153,43 +152,13 @@ pub fn load_or_create_keys() -> Result<(PublicKey, SecretKey), KeyfileError> {
     }
 }
 
-/// The reasons why decoding a key file can fail.
-#[derive(Debug, PartialEq, Eq, Copy, Clone)]
-pub enum DecodingError {
-    /// The file does not contain a json object with `"public"` and `"private"`
-    /// string fields).
-    MalformedFile,
-    /// The entries for the `"public"` or `"private"` fields are not valid
-    /// encoding of ssb keys.
-    InvalidKeyEncoding,
-}
-
-impl Display for DecodingError {
-    fn fmt(&self, f: &mut Formatter) -> Result<(), fmt::Error> {
-        match *self {
-            DecodingError::MalformedFile => write!(f, "DecodingError::MalformedFile"),
-            DecodingError::InvalidKeyEncoding => write!(f, "DecodingError::InvalidKeyEncoding"),
-        }
-    }
-}
-
-impl Error for DecodingError {
-    fn description(&self) -> &str {
-        match *self {
-            DecodingError::MalformedFile => "Malformed ssb key file",
-            DecodingError::InvalidKeyEncoding => "Incorrectly encoded ssb keys",
-        }
-    }
-}
-
 /// The reasons why reading keys from a file can fail.
 #[derive(Debug)]
 pub enum KeyfileError {
     /// An error occured while accessing the file system.
     FileError(io::Error),
-    /// The entries for the `"public"` or `"private"` fields are not valid
-    /// encoding of ssb keys.
-    DecodingError(DecodingError),
+    /// The key file did not contain valid (commented) json.
+    JsonError(JsonError),
     /// Could not determine the location of the key file.
     UnknownLocation,
 }
@@ -198,7 +167,7 @@ impl Display for KeyfileError {
     fn fmt(&self, f: &mut Formatter) -> Result<(), fmt::Error> {
         match *self {
             KeyfileError::FileError(ref err) => write!(f, "Keyfile error: {}", err),
-            KeyfileError::DecodingError(ref err) => write!(f, "Keyfile error: {}", err),
+            KeyfileError::JsonError(ref err) => write!(f, "Keyfile error: {}", err),
             KeyfileError::UnknownLocation => write!(f, "Keyfile error: Unknown location"),
         }
     }
@@ -208,7 +177,7 @@ impl Error for KeyfileError {
     fn description(&self) -> &str {
         match *self {
             KeyfileError::FileError(ref err) => err.description(),
-            KeyfileError::DecodingError(ref err) => err.description(),
+            KeyfileError::JsonError(ref err) => err.description(),
             KeyfileError::UnknownLocation => "Could not determine the location of the key file",
         }
     }
@@ -216,7 +185,7 @@ impl Error for KeyfileError {
     fn cause(&self) -> Option<&Error> {
         match *self {
             KeyfileError::FileError(ref err) => Some(err),
-            KeyfileError::DecodingError(ref err) => Some(err),
+            KeyfileError::JsonError(ref err) => Some(err),
             KeyfileError::UnknownLocation => None,
         }
     }
@@ -228,9 +197,9 @@ impl From<io::Error> for KeyfileError {
     }
 }
 
-impl From<DecodingError> for KeyfileError {
-    fn from(err: DecodingError) -> KeyfileError {
-        KeyfileError::DecodingError(err)
+impl From<JsonError> for KeyfileError {
+    fn from(err: JsonError) -> KeyfileError {
+        KeyfileError::JsonError(err)
     }
 }
 
@@ -244,19 +213,19 @@ const PRE_COMMENT: &'static str = "# this is your SECRET name.
 
 ";
 
-const POST_COMMENT: &'static str = "# WARNING! It's vital that you DO NOT edit OR share your secret name
-# instead, share your public name
-# your public name: @";
+const POST_COMMENT: &'static str = "
 
-// #[cfg(test)]
-// mod tests {
-//     use super::*;
-//
-//     #[test]
-//     fn try_it() {
-//         let (pk, sk) = load_or_create_keys().unwrap();
-//         println!("{:?}, {:?}", pk, sk);
-//         println!("{:?}", PublicKeyEncBuf::new(&pk));
-//         println!("{:?}", SecretKeyEncBuf::new(&sk).as_ref());
-//     }
-// }
+# WARNING! It's vital that you DO NOT edit OR share your secret name
+# instead, share your public name";
+// TODO add public key with @
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn try_it() {
+        let (pk, sk) = load_or_create_keys().unwrap();
+        println!("{:?}, {:?}", pk, sk);
+    }
+}
