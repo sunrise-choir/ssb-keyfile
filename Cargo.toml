@@ -8,7 +8,8 @@ readme = "README.md"
 license = "GPL-3.0"
 
 [dependencies]
-ssb-common = "0.2.0"
+# ssb-common = "0.2.2" TODO
+ssb-common = { git = "https://github.com/AljoschaMeyer/ssb-common-rs" }
 regex = "0.2.6"
 lazy_static = "1.0.0"
 serde = "1.0.27"

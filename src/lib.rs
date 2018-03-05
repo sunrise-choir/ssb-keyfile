@@ -24,6 +24,7 @@ use std::convert::From;
 
 use ssb_common::directory::ssb_directory;
 use ssb_common::keys::{PublicKey, SecretKey, gen_keypair};
+use ssb_common::links::FeedIdRef;
 use regex::{Regex, RegexBuilder};
 use serde::de::Error as DeError;
 use serde_json::{from_str, to_string_pretty};
@@ -54,7 +55,7 @@ struct KeyfileContentBorrow<'a> {
     curve: String,
     public: &'a PublicKey,
     private: &'a SecretKey,
-    id: String, // TODO change this once links are implemented in ssb-common
+    id: FeedIdRef<'a>,
 }
 
 impl<'a> KeyfileContentBorrow<'a> {
@@ -67,7 +68,7 @@ impl<'a> KeyfileContentBorrow<'a> {
             },
             public: pk,
             private: sk,
-            id: "TODO".to_string(), // TODO change this once links are implemented in ssb-common
+            id: FeedIdRef::new(pk),
         }
     }
 }
@@ -122,6 +123,7 @@ pub fn new_keyfile_string(pk: &PublicKey, sk: &SecretKey) -> String {
     msg.push_str(PRE_COMMENT);
     msg.push_str(&to_string_pretty(&KeyfileContentBorrow::new(pk, sk)).unwrap());
     msg.push_str(POST_COMMENT);
+    msg.push_str(&FeedIdRef::new(pk).to_encoding());
 
     msg
 }
@@ -216,8 +218,8 @@ const PRE_COMMENT: &'static str = "# this is your SECRET name.
 const POST_COMMENT: &'static str = "
 
 # WARNING! It's vital that you DO NOT edit OR share your secret name
-# instead, share your public name";
-// TODO add public key with @
+# instead, share your public name
+# your public name: ";
 
 #[cfg(test)]
 mod tests {
