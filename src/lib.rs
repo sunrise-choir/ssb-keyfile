@@ -1,208 +1,143 @@
-//! Read or create ssb keyfiles.
-//!
-//! This library uses libsodium internally. In application code, call
-//! [`sodiumoxide::init()`](https://dnaq.github.io/sodiumoxide/sodiumoxide/fn.init.html)
-//! before using any functions from this module that generate keyfiles.
-
-#![deny(missing_docs)]
-
-extern crate ssb_common;
-extern crate regex;
-#[macro_use]
-extern crate lazy_static;
+//! Read ssb keyfiles, as created by the js implementation.
+extern crate base64;
 extern crate serde;
 extern crate serde_json;
+extern crate snafu;
 #[macro_use]
 extern crate serde_derive;
+extern crate ssb_crypto;
 
-use std::path::{PathBuf, Path};
-use std::io::{self, Read, Write};
-use std::fs::{File, OpenOptions, create_dir_all};
-use std::error::Error;
-use std::fmt::{self, Display, Formatter};
-use std::convert::From;
+use std::fs::File;
+use std::io::{self, Read};
+use std::path::{Path, PathBuf};
 
-use ssb_common::directory::ssb_directory;
-use ssb_common::keys::{PublicKey, SecretKey, gen_keypair};
-use ssb_common::links::FeedIdRef;
-use regex::{Regex, RegexBuilder};
-use serde::de::Error as DeError;
-use serde_json::{from_str, to_string_pretty};
+use serde::Serialize;
 use serde_json::error::Error as JsonError;
+use snafu::{OptionExt as _, ResultExt as _, Snafu};
+use ssb_crypto::{PublicKey, SecretKey};
 
-/// The name of the ssb keyfile.
-pub const KEYFILE_NAME: &'static str = "secret";
-
-/// A convenience function that returns the full path to the ssb secret file.
-///
-/// This uses `ssb_common::directory::ssb_directory` and returns `None` in the
-/// same cases.
-pub fn keyfile_path() -> Option<PathBuf> {
-    ssb_directory().map(|mut path| {
-                            path.push(KEYFILE_NAME);
-                            path
-                        })
-}
-
-#[derive(Deserialize)]
-struct KeyfileContent {
-    public: PublicKey,
-    private: SecretKey,
-}
-
-#[derive(Serialize)]
-struct KeyfileContentBorrow<'a> {
-    curve: String,
-    public: &'a PublicKey,
-    private: &'a SecretKey,
-    id: FeedIdRef<'a>,
-}
-
-impl<'a> KeyfileContentBorrow<'a> {
-    fn new(pk: &'a PublicKey, sk: &'a SecretKey) -> KeyfileContentBorrow<'a> {
-        KeyfileContentBorrow {
-            curve: if pk.is_ed25519() {
-                "ed25519".to_string()
-            } else {
-                unimplemented!()
-            },
-            public: pk,
-            private: sk,
-            id: FeedIdRef::new(pk),
-        }
-    }
-}
-
-/// Parse the public and secret key from the content of a key file as a string.
-pub fn keys_from_str(secret: &str) -> Result<(PublicKey, SecretKey), JsonError> {
-    lazy_static! {
-        static ref RE: Regex = RegexBuilder::new(r"^(?:\s*#.*?\n)*(.*?)(?:\s*#.*\n?)$").dot_matches_new_line(true).build().unwrap();
-    }
-
-    match RE.captures(secret) {
-        None => Err(JsonError::custom("keyfile did not contain a json object")),
-        Some(caps) => {
-            match caps.get(1) {
-                None => Err(JsonError::custom("keyfile did not contain a json object")),
-                Some(json) => {
-                    let content = from_str::<KeyfileContent>(json.as_str());
-                    content.map(|data| (data.public, data.private))
-                }
-            }
-        }
-    }
+#[derive(Debug, Deserialize)]
+struct SecretFile {
+    public: String,
+    private: String,
 }
 
 /// Read the key file at the given path and parse the keys from it.
 ///
 /// The `KeyfileError` returned by this is never of the
 /// `KeyfileError::UnknownLocation` variant.
-pub fn load_keys_from_path(path: &Path) -> Result<(PublicKey, SecretKey), KeyfileError> {
-    let mut file = File::open(path)?;
-    let mut contents = String::with_capacity(727); // length in bytes of the default key file
-    file.read_to_string(&mut contents)?;
+pub fn load_keys_from_path<P: AsRef<Path>>(path: P) -> Result<(PublicKey, SecretKey), Error> {
+    let mut f = File::open(&path).with_context(|| FileRead {
+        path: path.as_ref().to_path_buf(),
+    })?;
 
-    Ok(keys_from_str(&contents)?)
+    // A standard js ssb secret file is 727 bytes
+    let mut buf = [0u8; 1024];
+    f.read(&mut buf).with_context(|| FileRead {
+        path: path.as_ref().to_path_buf(),
+    })?;
+    let sec_str = std::str::from_utf8(&buf).context(Utf8)?;
+    keys_from_str(sec_str)
 }
 
-/// Read the key file from the default location and parse the keys from it.
-///
-/// Internally, this uses `keyfile_path()` to determine where to look for the
-/// key file.
-pub fn load_keys() -> Result<(PublicKey, SecretKey), KeyfileError> {
-    match keyfile_path() {
-        None => Err(KeyfileError::UnknownLocation),
-        Some(path) => load_keys_from_path(&path),
-    }
+#[derive(Debug, Serialize)]
+struct SecretFileFull {
+    curve: &'static str,
+    public: String,
+    private: String,
+    id: String,
 }
 
-/// Create a string containing the content of a new secret file for the given keys.
+/// Load keys from the string contents of a js ssb secret file.
+pub fn keys_from_str(s: &str) -> Result<(PublicKey, SecretKey), Error> {
+    let sec_str = s
+        .lines()
+        .filter(|s| !s.starts_with('#'))
+        .collect::<Vec<&str>>()
+        .concat();
+
+    // let v = serde_json::from_str::<serde_json::Value>(&sec_str)?;
+    let sec = serde_json::from_str::<SecretFile>(&sec_str).context(Json)?;
+
+    let pbytes = decode_b64_key(&sec.public).context(DecodePublic)?;
+    let sbytes = decode_b64_key(&sec.private).context(DecodeSecret)?;
+
+    let p = PublicKey::from_slice(&pbytes).context(CreatePublic)?;
+    let s = SecretKey::from_slice(&sbytes).context(CreateSecret)?;
+
+    Ok((p, s))
+}
+
+fn decode_b64_key(s: &str) -> Result<Vec<u8>, base64::DecodeError> {
+    base64::decode_config(s.trim_end_matches(".ed25519"), base64::STANDARD)
+}
+
+fn encode_key(bytes: &[u8]) -> String {
+    let mut out = base64::encode_config(bytes, base64::STANDARD);
+    out.push_str(".ed25519");
+    out
+}
+
+/// Create a string containing the content of a new secret file for the given keys,
+/// in js ssb commented-json format.
 pub fn new_keyfile_string(pk: &PublicKey, sk: &SecretKey) -> String {
-    let mut msg = String::with_capacity(705);
+    let mut msg = Vec::with_capacity(727);
 
-    msg.push_str(PRE_COMMENT);
-    msg.push_str(&to_string_pretty(&KeyfileContentBorrow::new(pk, sk)).unwrap());
-    msg.push_str(POST_COMMENT);
-    msg.push_str(&FeedIdRef::new(pk).to_encoding());
+    let id = {
+        let mut p = encode_key(&pk.0);
+        p.insert(0, '@');
+        p
+    };
 
-    msg
-}
+    let kf = SecretFileFull {
+        curve: "ed25519",
+        public: encode_key(&pk.0),
+        private: encode_key(&sk.0),
+        id: id,
+    };
 
-/// Read the keyfile from the default location and parse the keys from it. If
-/// the keyfile does not exist, it is created instead (with randomly generated
-/// keys).
-pub fn load_or_create_keys() -> Result<(PublicKey, SecretKey), KeyfileError> {
-    match load_keys() {
-        Ok(keys) => Ok(keys),
-        Err(KeyfileError::FileError(_)) => {
-            match ssb_directory() {
-                Some(mut dir) => {
-                    create_dir_all(&dir)?;
-                    dir.push(KEYFILE_NAME);
-                    let mut file = OpenOptions::new()
-                        .write(true)
-                        .create_new(true)
-                        .open(dir)?;
-                    let (pk, sk) = gen_keypair();
-                    file.write_all(new_keyfile_string(&pk, &sk).as_bytes())?;
-                    Ok((pk, sk))
-                }
-                None => Err(KeyfileError::UnknownLocation),
-            }
-        }
-        Err(e) => Err(e),
-    }
+    msg.extend_from_slice(PRE_COMMENT.as_bytes());
+
+    let formatter = serde_json::ser::PrettyFormatter::with_indent(b"");
+    let mut ser = serde_json::Serializer::with_formatter(&mut msg, formatter);
+    kf.serialize(&mut ser).unwrap();
+
+    msg.extend_from_slice(POST_COMMENT.as_bytes());
+    msg.extend_from_slice(kf.id.as_bytes());
+
+    String::from_utf8(msg).unwrap()
 }
 
 /// The reasons why reading keys from a file can fail.
-#[derive(Debug)]
-pub enum KeyfileError {
+#[derive(Debug, Snafu)]
+pub enum Error {
     /// An error occured while accessing the file system.
-    FileError(io::Error),
+    #[snafu(display("Failed to read secret file at path: {} with error: {}", path.display(), source))]
+    FileRead { path: PathBuf, source: io::Error },
+
+    /// Conterting the file contents with std::str::from_utf8() failed.
+    #[snafu(display("Secret file isn't valid utf8: {}", source))]
+    Utf8 { source: std::str::Utf8Error },
+
     /// The key file did not contain valid (commented) json.
-    JsonError(JsonError),
-    /// Could not determine the location of the key file.
-    UnknownLocation,
-}
+    #[snafu(display("Failed to deserialize secret file: {}", source))]
+    Json { source: JsonError },
 
-impl Display for KeyfileError {
-    fn fmt(&self, f: &mut Formatter) -> Result<(), fmt::Error> {
-        match *self {
-            KeyfileError::FileError(ref err) => write!(f, "Keyfile error: {}", err),
-            KeyfileError::JsonError(ref err) => write!(f, "Keyfile error: {}", err),
-            KeyfileError::UnknownLocation => write!(f, "Keyfile error: Unknown location"),
-        }
-    }
-}
+    /// The key file did not contain valid (commented) json.
+    #[snafu(display("Failed to decode public key: {}", source))]
+    DecodePublic { source: base64::DecodeError },
 
-impl Error for KeyfileError {
-    fn description(&self) -> &str {
-        match *self {
-            KeyfileError::FileError(ref err) => err.description(),
-            KeyfileError::JsonError(ref err) => err.description(),
-            KeyfileError::UnknownLocation => "Could not determine the location of the key file",
-        }
-    }
+    /// The key file did not contain valid (commented) json.
+    #[snafu(display("Failed to decode public key: {}", source))]
+    DecodeSecret { source: base64::DecodeError },
 
-    fn cause(&self) -> Option<&Error> {
-        match *self {
-            KeyfileError::FileError(ref err) => Some(err),
-            KeyfileError::JsonError(ref err) => Some(err),
-            KeyfileError::UnknownLocation => None,
-        }
-    }
-}
+    /// The key file did not contain valid (commented) json.
+    #[snafu(display("Failed to decode public key."))]
+    CreatePublic {},
 
-impl From<io::Error> for KeyfileError {
-    fn from(err: io::Error) -> KeyfileError {
-        KeyfileError::FileError(err)
-    }
-}
-
-impl From<JsonError> for KeyfileError {
-    fn from(err: JsonError) -> KeyfileError {
-        KeyfileError::JsonError(err)
-    }
+    /// The key file did not contain valid (commented) json.
+    #[snafu(display("Failed to decode public key."))]
+    CreateSecret {},
 }
 
 const PRE_COMMENT: &'static str = "# this is your SECRET name.
@@ -225,9 +160,30 @@ const POST_COMMENT: &'static str = "
 mod tests {
     use super::*;
 
+    fn test_data_file(name: &str) -> PathBuf {
+        let mut d = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        d.push("test-data");
+        d.push(name);
+        d
+    }
+
     #[test]
-    fn try_it() {
-        let (pk, sk) = load_or_create_keys().unwrap();
-        println!("{:?}, {:?}", pk, sk);
+    fn read_js_file() {
+        let (pk, sk) = load_keys_from_path(test_data_file("secret")).unwrap();
+
+        assert_eq!(
+            pk.0,
+            [
+                31u8, 106, 151, 121, 46, 108, 56, 165, 42, 104, 99, 69, 129, 18, 122, 169, 30, 60,
+                250, 80, 30, 63, 64, 189, 150, 175, 72, 86, 84, 12, 162, 215
+            ]
+        );
+        assert_eq!(pk, sk.public_key());
+
+        let newkf = new_keyfile_string(&pk, &sk);
+        assert_eq!(
+            newkf,
+            std::fs::read_to_string(test_data_file("secret")).unwrap()
+        );
     }
 }

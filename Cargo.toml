@@ -1,6 +1,6 @@
 [package]
 name = "ssb-keyfile"
-version = "0.1.2"
+version = "0.2.0"
 authors = ["AljoschaMeyer <mail@aljoscha-meyer.de>"]
 description = "Keyfile operations for ssb."
 repository = "https://github.com/AljoschaMeyer/ssb-keyfile-rs"
@@ -8,9 +8,9 @@ readme = "README.md"
 license = "GPL-3.0"
 
 [dependencies]
-ssb-common = "0.2.3"
-regex = "0.2.6"
-lazy_static = "1.0.0"
 serde = "1.0.27"
 serde_derive = "1.0.27"
 serde_json = "1.0.10"
+ssb-crypto = { version = "~0.1.4", path = "../ssb-crypto" }
+snafu = "0.6.0"
+base64 = "0.11.0"
