@@ -50,11 +50,12 @@ struct SecretFileFull {
 
 /// Load keys from the string contents of a js ssb secret file.
 pub fn keys_from_str(s: &str) -> Result<(PublicKey, SecretKey), Error> {
-    let sec_str = s
+    let raw_sec_str = s
         .lines()
         .filter(|s| !s.starts_with('#'))
         .collect::<Vec<&str>>()
         .concat();
+    let sec_str = raw_sec_str.trim_matches(char::from(0));
 
     // let v = serde_json::from_str::<serde_json::Value>(&sec_str)?;
     let sec = serde_json::from_str::<SecretFile>(&sec_str).context(Json)?;
