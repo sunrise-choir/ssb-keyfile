@@ -6,6 +6,7 @@ extern crate snafu;
 #[macro_use]
 extern crate serde_derive;
 extern crate ssb_crypto;
+extern crate ssb_multiformats;
 
 use std::fs::File;
 use std::io::{self, Read};
@@ -15,18 +16,19 @@ use serde::Serialize;
 use serde_json::error::Error as JsonError;
 use snafu::{OptionExt as _, ResultExt as _, Snafu};
 use ssb_crypto::{PublicKey, SecretKey};
+use ssb_multiformats::multikey::Multikey;
 
 #[derive(Debug, Deserialize)]
 struct SecretFile {
     public: String,
     private: String,
+    id: Multikey,
 }
 
 /// Read the key file at the given path and parse the keys from it.
-///
-/// The `KeyfileError` returned by this is never of the
-/// `KeyfileError::UnknownLocation` variant.
-pub fn load_keys_from_path<P: AsRef<Path>>(path: P) -> Result<(PublicKey, SecretKey), Error> {
+pub fn load_keys_from_path<P: AsRef<Path>>(
+    path: P,
+) -> Result<(PublicKey, SecretKey, Multikey), Error> {
     let mut f = File::open(&path).with_context(|| FileRead {
         path: path.as_ref().to_path_buf(),
     })?;
@@ -49,7 +51,7 @@ struct SecretFileFull {
 }
 
 /// Load keys from the string contents of a js ssb secret file.
-pub fn keys_from_str(s: &str) -> Result<(PublicKey, SecretKey), Error> {
+pub fn keys_from_str(s: &str) -> Result<(PublicKey, SecretKey, Multikey), Error> {
     let raw_sec_str = s
         .lines()
         .filter(|s| !s.starts_with('#'))
@@ -66,7 +68,7 @@ pub fn keys_from_str(s: &str) -> Result<(PublicKey, SecretKey), Error> {
     let p = PublicKey::from_slice(&pbytes).context(CreatePublic)?;
     let s = SecretKey::from_slice(&sbytes).context(CreateSecret)?;
 
-    Ok((p, s))
+    Ok((p, s, sec.id))
 }
 
 fn decode_b64_key(s: &str) -> Result<Vec<u8>, base64::DecodeError> {
@@ -170,7 +172,7 @@ mod tests {
 
     #[test]
     fn read_js_file() {
-        let (pk, sk) = load_keys_from_path(test_data_file("secret")).unwrap();
+        let (pk, sk, _id) = load_keys_from_path(test_data_file("secret")).unwrap();
 
         assert_eq!(
             pk.0,
@@ -186,5 +188,18 @@ mod tests {
             newkf,
             std::fs::read_to_string(test_data_file("secret")).unwrap()
         );
+    }
+
+    #[test]
+    fn read_go_file() {
+        let (pk, sk, _id) = load_keys_from_path(test_data_file("secret")).unwrap();
+        assert_eq!(
+            pk.0,
+            [
+                31u8, 106, 151, 121, 46, 108, 56, 165, 42, 104, 99, 69, 129, 18, 122, 169, 30, 60,
+                250, 80, 30, 63, 64, 189, 150, 175, 72, 86, 84, 12, 162, 215
+            ]
+        );
+        assert_eq!(pk, sk.public_key());
     }
 }
