@@ -1,6 +1,6 @@
 [package]
 name = "ssb-keyfile"
-version = "0.3.0"
+version = "0.3.1"
 authors = ["AljoschaMeyer <mail@aljoscha-meyer.de>"]
 description = "Keyfile operations for ssb."
 repository = "https://github.com/AljoschaMeyer/ssb-keyfile-rs"
