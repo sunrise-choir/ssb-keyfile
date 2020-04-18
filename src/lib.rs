@@ -15,8 +15,8 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 use serde_json::error::Error as JsonError;
 use snafu::{OptionExt as _, ResultExt as _, Snafu};
-use ssb_crypto::{PublicKey, SecretKey};
-use ssb_multiformats::multikey::Multikey;
+pub use ssb_crypto::{PublicKey, SecretKey};
+pub use ssb_multiformats::multikey::Multikey;
 
 #[derive(Debug, Deserialize)]
 struct SecretFile {
