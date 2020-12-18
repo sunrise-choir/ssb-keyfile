@@ -11,7 +11,7 @@ let keypair = ssb_keyfile::read_from_path("/path/to/secret")?;
 ```
 
 ```
-cargo install ssb-keyfile
+cargo install ssb-keyfile --all-features
 ssb-keyfile new --path ~/.ssb-foo/secret
 ssb-keyfile new --path ~/.ssb-bar/secret --secret XQfgelZViM6npy...
 ```
