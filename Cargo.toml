@@ -1,9 +1,9 @@
 [package]
 name = "ssb-keyfile"
-version = "0.4.0"
+version = "0.5.0"
 authors = ["AljoschaMeyer <mail@aljoscha-meyer.de>"]
 description = "Keyfile operations for ssb."
-repository = "https://github.com/AljoschaMeyer/ssb-keyfile-rs"
+repository = "https://github.com/sunrise-choir/ssb-keyfile-rs"
 readme = "README.md"
 license = "GPL-3.0"
 edition = "2018"
@@ -11,6 +11,9 @@ edition = "2018"
 [dependencies]
 serde = { version = "1.0.118", features = ["derive"] }
 serde_json = "1.0.60"
-ssb-crypto = { version = "0.2.2", default_features = false, features = ["b64"] }
+ssb-crypto = "0.2.2"
 thiserror = "1.0.22"
 base64 = "0.13.0"
+
+[dev-dependencies]
+tempfile = "3.1"
