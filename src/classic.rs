@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::error::Error as JsonError;
 use ssb_crypto::AsBytes;
 pub use ssb_crypto::Keypair;
-use std::fs::File;
+use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::Path;
 use thiserror::Error;
@@ -65,16 +65,8 @@ pub fn write(keypair: &Keypair, mut w: impl Write) -> Result<(), io::Error> {
 /// Write the given [Keypair] to a new file at the specified path. `path` should include the file name.
 /// Fails if the path exists, or if the path is a directory.
 pub fn write_to_path<P: AsRef<Path>>(keypair: &Keypair, path: P) -> Result<(), io::Error> {
-    if path.as_ref().is_dir() {
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
-            "expected a path to a file",
-        ));
-    }
-
-    if path.as_ref().exists() {
-        return Err(io::Error::new(io::ErrorKind::AlreadyExists, "file exists"));
-    }
+    // NOTE: Path::is_dir() returns false for eg "/tmp/foo/" if foo doesn't exist;
+    //  ie it doesn't check if the path 'looks like' a dir. We'd have to do that manually.
 
     if let Some(dir) = path.as_ref().parent() {
         if !dir.exists() {
@@ -82,7 +74,10 @@ pub fn write_to_path<P: AsRef<Path>>(keypair: &Keypair, path: P) -> Result<(), i
         }
     }
 
-    let f = File::create(&path)?;
+    let f = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&path)?;
     write(keypair, f)
 }
 
