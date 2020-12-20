@@ -53,7 +53,7 @@ pub fn write(keypair: &Keypair, mut w: impl Write) -> Result<(), io::Error> {
     };
 
     w.write(PRE_COMMENT.as_bytes())?;
-    let formatter = serde_json::ser::PrettyFormatter::with_indent(b"");
+    let formatter = serde_json::ser::PrettyFormatter::with_indent(b"  ");
     let mut ser = serde_json::Serializer::with_formatter(&mut w, formatter);
     kf.serialize(&mut ser).unwrap();
 
@@ -146,21 +146,23 @@ pub enum KeyFileError {
     Decode,
 }
 
-const PRE_COMMENT: &'static str = "# this is your SECRET name.
-# this name gives you magical powers.
-# with it you can mark your messages so that your friends can verify
-# that they really did come from you.
+const PRE_COMMENT: &'static str = "# WARNING: Never show this to anyone.
+# WARNING: Never edit it or use it on multiple devices at once.
 #
-# if any one learns this name, they can use it to destroy your identity
-# NEVER show this to anyone!!!
-
+# This is your SECRET, it gives you magical powers. With your secret you can
+# sign your messages so that your friends can verify that the messages came
+# from you. If anyone learns your secret, they can use it to impersonate you.
+#
+# If you use this secret on more than one device you will create a fork and
+# your friends will stop replicating your content.
+#
 ";
 
 const POST_COMMENT: &'static str = "
-
-# WARNING! It's vital that you DO NOT edit OR share your secret name
-# instead, share your public name
-# your public name: ";
+#
+# The only part of this file that's safe to share is your public name:
+#
+#   ";
 
 #[cfg(test)]
 mod tests {
@@ -179,29 +181,17 @@ mod tests {
         let keypair = read_from_path(test_data_file("secret")).unwrap();
 
         assert_eq!(
-            keypair.public.0,
-            [
-                31u8, 106, 151, 121, 46, 108, 56, 165, 42, 104, 99, 69, 129, 18, 122, 169, 30, 60,
-                250, 80, 30, 63, 64, 189, 150, 175, 72, 86, 84, 12, 162, 215
-            ]
-        );
-
-        let newkf = write_to_string(&keypair);
-        assert_eq!(
-            newkf,
-            std::fs::read_to_string(test_data_file("secret")).unwrap()
+            keypair.public.as_base64(),
+            "H2qXeS5sOKUqaGNFgRJ6qR48+lAeP0C9lq9IVlQMotc="
         );
     }
 
     #[test]
     fn read_go_file() {
-        let keypair = read_from_path(test_data_file("secret")).unwrap();
+        let keypair = read_from_path(test_data_file("secret-go")).unwrap();
         assert_eq!(
-            keypair.public.0,
-            [
-                31u8, 106, 151, 121, 46, 108, 56, 165, 42, 104, 99, 69, 129, 18, 122, 169, 30, 60,
-                250, 80, 30, 63, 64, 189, 150, 175, 72, 86, 84, 12, 162, 215
-            ]
+            keypair.public.as_base64(),
+            "H2qXeS5sOKUqaGNFgRJ6qR48+lAeP0C9lq9IVlQMotc="
         );
     }
 
@@ -212,6 +202,7 @@ mod tests {
         // path must not be a dir
         assert!(generate_at_path(dir.path()).is_err());
         let path = dir.path().join("secret");
+
         let kp = generate_at_path(&path).unwrap();
 
         // file must not exist
