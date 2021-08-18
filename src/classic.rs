@@ -49,7 +49,7 @@ pub fn write(keypair: &Keypair, mut w: impl Write) -> Result<(), io::Error> {
         curve: "ed25519",
         public: encode_key(&keypair.public.0),
         private: encode_key(keypair.as_bytes()),
-        id: id,
+        id,
     };
 
     w.write(PRE_COMMENT.as_bytes())?;
@@ -141,7 +141,7 @@ pub enum KeyFileError {
     Decode,
 }
 
-const PRE_COMMENT: &'static str = "# WARNING: Never show this to anyone.
+const PRE_COMMENT: &str = "# WARNING: Never show this to anyone.
 # WARNING: Never edit it or use it on multiple devices at once.
 #
 # This is your SECRET, it gives you magical powers. With your secret you can
@@ -153,7 +153,7 @@ const PRE_COMMENT: &'static str = "# WARNING: Never show this to anyone.
 #
 ";
 
-const POST_COMMENT: &'static str = "
+const POST_COMMENT: &str = "
 #
 # The only part of this file that's safe to share is your public name:
 #
